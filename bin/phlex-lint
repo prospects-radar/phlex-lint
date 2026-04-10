@@ -36,7 +36,7 @@ OptionParser.new do |opts|
     options[:auto_fix] = true
   end
 
-  opts.on("--only RULES", Array, "Only run specified rules (comma-separated, e.g., ButtonRequiresVariant,NoRawButtons)") do |rules|
+  opts.on("--only RULES", Array, "Only run specified rules (comma-separated, e.g., NoRawButtons or DesignSystem/NoRawButtons)") do |rules|
     options[:only] = rules.map(&:strip).reject(&:empty?)
   end
 
@@ -79,6 +79,7 @@ if options[:list_rules]
   end
   puts ""
   puts "Usage: phlex-lint --only RuleName,AnotherRule"
+  puts "       phlex-lint --only Category/RuleName"
   exit 0
 end
 
@@ -182,7 +183,7 @@ if options[:format] == "json"
       line: v.line,
       column: v.column,
       message: v.message,
-      rule: v.rule_name,
+      rule: v.qualified_rule_name,
       auto_correctable: v.auto_correctable?
     }
     data[:documentation] = v.documentation_url if v.documentation_url
