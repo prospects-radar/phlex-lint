@@ -1,0 +1,208 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "optparse"
+require_relative "../lib/phlex_lint"
+
+options = {
+  verbose: false,
+  format: "text",
+  docs: false,
+  auto_fix: false,
+  only: nil,
+  list_rules: false,
+  exclude_files: nil
+}
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: phlex-lint [options] [GLOB_PATTERN...]"
+  opts.separator ""
+  opts.separator "Default: lints both app/components/**/*.rb and app/views/**/*.rb"
+  opts.separator ""
+  opts.separator "Auto-corrections: Button and StatCard variants inferred from text/label content"
+  opts.separator "See vendor/local_gems/phlex-lint/HEURISTICS.md for details"
+  opts.separator ""
+  opts.separator "Options:"
+
+  opts.on("-v", "--verbose", "Verbose output") do
+    options[:verbose] = true
+  end
+
+  opts.on("-d", "--docs", "Show documentation links for each violation") do
+    options[:docs] = true
+  end
+
+  opts.on("--auto-fix", "Automatically fix violations where possible") do
+    options[:auto_fix] = true
+  end
+
+  opts.on("--only RULES", Array, "Only run specified rules (comma-separated, e.g., ButtonRequiresVariant,NoRawButtons)") do |rules|
+    options[:only] = rules.map(&:strip).reject(&:empty?)
+  end
+
+  opts.on("--list-rules", "List all available rules and exit") do
+    options[:list_rules] = true
+  end
+
+  opts.on("--exclude-files GLOB", "Exclude files matching pattern (e.g., 'app/views/legacy/**/*')") do |glob|
+    options[:exclude_files] = glob
+  end
+
+  opts.on("--format FORMAT", ["text", "json"], "Output format (default: text)") do |f|
+    options[:format] = f
+  end
+
+  opts.on("-h", "--help", "Show this help message") do
+    puts opts
+    exit 0
+  end
+
+  opts.on("--version", "Show version") do
+    puts "phlex-lint #{PhlexLint::VERSION}"
+    exit 0
+  end
+end.parse!
+
+# Load configuration from .phlex-lint.yml in the current directory
+config = PhlexLint::Configuration.load(Dir.pwd)
+
+# List rules and exit if requested
+if options[:list_rules]
+  puts "Available rules:"
+  puts ""
+  PhlexLint::RuleEngine::RULES.each do |rule_class|
+    qualified = rule_class.qualified_name
+    description = rule_class.const_get(:MESSAGE) if rule_class.const_defined?(:MESSAGE)
+    description ||= "No description available"
+    puts "  - #{qualified}"
+    puts "    #{description[0..80]}#{description.length > 80 ? '...' : ''}"
+  end
+  puts ""
+  puts "Usage: phlex-lint --only RuleName,AnotherRule"
+  exit 0
+end
+
+# Default glob patterns if none provided
+patterns = if ARGV.empty?
+  ["app/components/**/*.rb", "app/views/**/*.rb"]
+else
+  ARGV
+end
+
+all_violations = []
+
+# Build exclude pattern if specified
+exclude_pattern = options[:exclude_files]
+
+patterns.each do |pattern|
+  puts "Linting: #{pattern}" if options[:verbose]
+  files = Dir.glob(pattern).sort
+
+  # Exclude files if pattern provided
+  files = files.reject { |f| File.fnmatch?(exclude_pattern, f, File::FNM_PATHNAME) } if exclude_pattern
+
+  files.each do |file_path|
+    puts "  Checking: #{file_path}" if options[:verbose]
+
+    # Parse the file - need to keep both the parser (for skip annotations) and the tree
+    parser = PhlexLint::Parser.new(File.read(file_path), file_path)
+    tree = parser.parse
+    next unless tree
+
+    # Filter rules if --only specified
+    if options[:only]
+      violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, only: options[:only], parser: parser, config: config)
+    else
+      violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, parser: parser, config: config)
+    end
+    all_violations.concat(violations)
+  end
+end
+
+if all_violations.empty?
+  puts "phlex-lint: No violations found."
+  exit 0
+end
+
+# Auto-fix violations if requested
+if options[:auto_fix]
+  auto_correctable = all_violations.select(&:auto_correctable?)
+  fixed_count = 0
+
+  auto_correctable.each do |violation|
+    if violation.apply_correction
+      fixed_count += 1
+    end
+  end
+
+  if fixed_count > 0
+    puts "🔧 Fixed #{fixed_count} violation(s)."
+    puts ""
+
+    # Re-parse files to get updated violations
+    all_violations.clear
+    patterns.each do |pattern|
+      files = Dir.glob(pattern).sort
+      files = files.reject { |f| File.fnmatch?(exclude_pattern, f, File::FNM_PATHNAME) } if exclude_pattern
+
+      files.each do |file_path|
+        parser = PhlexLint::Parser.new(File.read(file_path), file_path)
+        tree = parser.parse
+        next unless tree
+
+        if options[:only]
+          violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, only: options[:only], parser: parser, config: config)
+        else
+          violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, parser: parser, config: config)
+        end
+        all_violations.concat(violations)
+      end
+    end
+  end
+end
+
+if all_violations.empty?
+  puts "phlex-lint: No remaining violations."
+  exit 0
+end
+
+# Filter out disabled violations
+active_violations = all_violations.reject(&:disabled?)
+
+if active_violations.empty?
+  puts "phlex-lint: No remaining violations (all violations are disabled via annotations)."
+  exit 0
+end
+
+if options[:format] == "json"
+  require "json"
+  violations_data = active_violations.map do |v|
+    data = {
+      file: v.file_path,
+      line: v.line,
+      column: v.column,
+      message: v.message,
+      rule: v.rule_name,
+      auto_correctable: v.auto_correctable?
+    }
+    data[:documentation] = v.documentation_url if v.documentation_url
+    data
+  end
+  puts JSON.pretty_generate(violations_data)
+else
+  if options[:docs]
+    active_violations.each { |v| puts v.to_s_with_docs }
+    puts ""
+  else
+    active_violations.each { |v| puts v.to_s }
+  end
+
+  auto_correctable_count = active_violations.count(&:auto_correctable?)
+  manual_count = active_violations.size - auto_correctable_count
+
+  puts "\nphlex-lint: #{active_violations.size} violation(s) found."
+  puts "  ✅ #{auto_correctable_count} auto-correctable (use --auto-fix)"
+  puts "  ⚠️  #{manual_count} require manual fixes" if manual_count > 0
+end
+
+exit 1
