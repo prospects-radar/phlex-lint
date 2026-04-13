@@ -8,21 +8,14 @@ Gem::Specification.new do |spec|
   spec.authors = ["Enterprise Modules"]
   spec.email = ["info@enterprisemodules.com"]
 
-  spec.summary = "Semantic linter for Phlex component files"
-  spec.description = "Parses Phlex component files into a virtual component tree and enforces " \
-                     "design system composition rules — including private helper expansion."
-  spec.homepage = "https://github.com/enterprisemodules/phlex-lint"
+  spec.summary = "Semantic linter for Phlex component composition"
+  spec.description = "Validates Phlex component composition rules against the virtual component tree"
+  spec.homepage = "https://github.com/prospects-radar/phlex-lint"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 3.0.0"
 
-  spec.files = Dir.chdir(__dir__) do
-    Dir["{lib,bin}/**/*", "README.md", "phlex-lint.gemspec"]
-  end
-  spec.require_paths = ["lib"]
+  spec.files = Dir["lib/**/*.rb", "bin/*"].sort
+  spec.bindir = "bin"
   spec.executables = ["phlex-lint"]
-
-  spec.add_dependency "parser", "~> 3.0"
-
-  spec.add_development_dependency "rake", "~> 13.0"
-  spec.add_development_dependency "rspec", "~> 3.12"
+  spec.require_paths = ["lib"]
 end

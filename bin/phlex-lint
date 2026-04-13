@@ -10,6 +10,7 @@ options = {
   docs: false,
   auto_fix: false,
   only: nil,
+  components: nil,
   list_rules: false,
   exclude_files: nil
 }
@@ -38,6 +39,10 @@ OptionParser.new do |opts|
 
   opts.on("--only RULES", Array, "Only run specified rules (comma-separated, e.g., NoRawButtons or DesignSystem/NoRawButtons)") do |rules|
     options[:only] = rules.map(&:strip).reject(&:empty?)
+  end
+
+  opts.on("--components NAMES", Array, "Only report violations on specified components (comma-separated, e.g., Paragraph,Heading)") do |names|
+    options[:components] = names.map { |n| n.strip.to_sym }
   end
 
   opts.on("--list-rules", "List all available rules and exit") do
@@ -110,12 +115,14 @@ patterns.each do |pattern|
     tree = parser.parse
     next unless tree
 
-    # Filter rules if --only specified
-    if options[:only]
-      violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, only: options[:only], parser: parser, config: config)
-    else
-      violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, parser: parser, config: config)
-    end
+    violations = PhlexLint::RuleEngine.check(
+      tree,
+      file_path: file_path,
+      only: options[:only],
+      components: options[:components],
+      parser: parser,
+      config: config
+    )
     all_violations.concat(violations)
   end
 end
@@ -151,11 +158,14 @@ if options[:auto_fix]
         tree = parser.parse
         next unless tree
 
-        if options[:only]
-          violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, only: options[:only], parser: parser, config: config)
-        else
-          violations = PhlexLint::RuleEngine.check(tree, file_path: file_path, parser: parser, config: config)
-        end
+        violations = PhlexLint::RuleEngine.check(
+          tree,
+          file_path: file_path,
+          only: options[:only],
+          components: options[:components],
+          parser: parser,
+          config: config
+        )
         all_violations.concat(violations)
       end
     end

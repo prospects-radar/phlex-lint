@@ -14,19 +14,19 @@ RSpec.describe PhlexLint::Rules::NoExtraClassesOnStandardizedComponents do
     rule.violations
   end
 
-  it "flags Heading with fw-bold class" do
+  it "flags Heading with a semantic class" do
     violations = check(<<~RUBY)
       def view_template
-        Heading(level: 2, class: "fw-bold") { "Title" }
+        Heading(level: 2, class: "hero-title") { "Title" }
       end
     RUBY
 
     expect(violations.count).to eq(1)
     expect(violations.first.message).to include("Heading")
-    expect(violations.first.message).to include("color:")
+    expect(violations.first.message).to include("wrapper element")
   end
 
-  it "flags Text with text-muted class" do
+  it "flags Text with utility classes" do
     violations = check(<<~RUBY)
       def view_template
         Text(class: "text-muted mt-2") { "Body" }
@@ -37,17 +37,17 @@ RSpec.describe PhlexLint::Rules::NoExtraClassesOnStandardizedComponents do
     expect(violations.first.message).to include("Text")
   end
 
-  it "does not flag Button with ms-3 margin class (covered by UseParentGapForSpacing)" do
+  it "flags Button with margin classes too" do
     violations = check(<<~RUBY)
       def view_template
         Button(variant: :primary, class: "ms-3") { "Save" }
       end
     RUBY
 
-    expect(violations).to be_empty
+    expect(violations.count).to eq(1)
   end
 
-  it "flags Button with pt-2 padding class (not covered by UseParentGapForSpacing)" do
+  it "flags Button with padding classes" do
     violations = check(<<~RUBY)
       def view_template
         Button(variant: :primary, class: "pt-2") { "Save" }
@@ -78,17 +78,17 @@ RSpec.describe PhlexLint::Rules::NoExtraClassesOnStandardizedComponents do
     expect(violations.count).to eq(1)
   end
 
-  it "does not flag StatCard with mb-3 margin class (covered by UseParentGapForSpacing)" do
+  it "flags StatCard with margin classes too" do
     violations = check(<<~RUBY)
       def view_template
         StatCard(label: "Revenue", value: "$100k", class: "mb-3")
       end
     RUBY
 
-    expect(violations).to be_empty
+    expect(violations.count).to eq(1)
   end
 
-  it "flags multiple standardized components in one template" do
+  it "flags multiple component calls in one template" do
     violations = check(<<~RUBY)
       def view_template
         Heading(level: 1, class: "fw-bold") { "Title" }
@@ -104,40 +104,42 @@ RSpec.describe PhlexLint::Rules::NoExtraClassesOnStandardizedComponents do
       def view_template
         Heading(level: 2, color: :primary) { "Title" }
         Text(color: :muted) { "Body" }
+        Box() { "Wrapper" }
       end
     RUBY
 
     expect(violations).to be_empty
   end
 
-  it "does not flag components with non-Bootstrap classes" do
+  it "flags components with non-Bootstrap classes" do
     violations = check(<<~RUBY)
       def view_template
         Heading(level: 2, class: "gm-heading-xl my-custom-class") { "Title" }
       end
     RUBY
 
-    expect(violations).to be_empty
+    expect(violations.count).to eq(1)
   end
 
-  it "does not flag dynamic class values" do
+  it "flags dynamic class values" do
     violations = check(<<~RUBY)
       def view_template
         Text(class: computed_class) { "Body" }
       end
     RUBY
 
-    expect(violations).to be_empty
+    expect(violations.count).to eq(1)
   end
 
-  it "does not flag non-standardized components with Bootstrap classes" do
+  it "flags non-standardized components too" do
     violations = check(<<~RUBY)
       def view_template
         FlexRow(class: "mb-3") { }
       end
     RUBY
 
-    expect(violations).to be_empty
+    expect(violations.count).to eq(1)
+    expect(violations.first.message).to include("FlexRow")
   end
 
   it "does not flag standardized components in atom files (atoms define their own internals)" do

@@ -6,14 +6,17 @@ module PhlexLint
   class Runner
     # Run phlex-lint against all files matching `glob_pattern`.
     # Returns true when clean, false when violations are found.
-    def self.run(glob_pattern, output: $stdout, config_dir: Dir.pwd)
-      new(glob_pattern, output:, config_dir:).run
+    #
+    # Options:
+    #   components: - optional array of component name strings to restrict violations
+    def self.run(glob_pattern, output: $stdout, components: nil)
+      new(glob_pattern, output:, components:).run
     end
 
-    def initialize(glob_pattern, output: $stdout, config_dir: Dir.pwd)
+    def initialize(glob_pattern, output: $stdout, components: nil)
       @glob_pattern = glob_pattern
       @output = output
-      @config = Configuration.load(config_dir)
+      @components = components&.map(&:to_sym)
     end
 
     def run
@@ -21,26 +24,20 @@ module PhlexLint
       all_violations = []
 
       files.each do |file_path|
-        parser = Parser.new(File.read(file_path), file_path)
-        tree = parser.parse
+        tree = Parser.parse_file(file_path)
         next unless tree
 
-        violations = RuleEngine.check(tree, file_path: file_path, parser: parser, config: @config)
+        violations = RuleEngine.check(tree, file_path: file_path, components: @components)
         all_violations.concat(violations)
-      rescue Errno::ENOENT
-        next
       end
 
-      # Filter out violations disabled by # phlex-lint:disable comments
-      active_violations = all_violations.reject(&:disabled?)
-
-      if active_violations.empty?
+      if all_violations.empty?
         @output.puts "phlex-lint: No violations found in #{files.size} file(s)."
         return true
       end
 
-      active_violations.each { |v| @output.puts v.to_s }
-      @output.puts "\nphlex-lint: #{active_violations.size} violation(s) found in #{files.size} file(s)."
+      all_violations.each { |v| @output.puts v.to_s }
+      @output.puts "\nphlex-lint: #{all_violations.size} violation(s) found in #{files.size} file(s)."
       false
     end
   end

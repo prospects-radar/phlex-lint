@@ -6,11 +6,8 @@ module PhlexLint
   # Subclasses must implement `#check(tree)` and call `violation(node, message)`
   # for each detected issue.
   #
-  # Subclasses may override `.applies_to_file?` to restrict the rule to a subset
-  # of files (e.g. only `app/components/settings/**`).
-  #
-  # Subclasses may override `.documentation_url` to provide a link to the
-  # design system skill or guide that explains the rule.
+  # Subclasses may call `category "CategoryName"` to group rules for
+  # qualified naming (e.g. "Structure/AlertBannerInFlexRow").
   class Rule
     attr_reader :violations
 
@@ -20,33 +17,18 @@ module PhlexLint
       @violations = []
     end
 
-    # Declare this rule's category. Used to build the qualified name
-    # (e.g., "Style/NoInlineStyles") shown in violation output and config.
-    #
-    #   class NoInlineStyles < Rule
-    #     category "Style"
-    #   end
-    #
-    # Call without arguments to read: `NoInlineStyles.category # => "Style"`
-    def self.category(name = nil)
-      if name
-        @category = name.to_s.freeze
+    # Set or get the category for this rule class.
+    def self.category(value = nil)
+      if value
+        @category = value
       else
-        @category
+        @category || "Uncategorized"
       end
     end
 
-    # Returns "Category/RuleName" (e.g., "Style/NoInlineStyles").
-    # Falls back to just "RuleName" if no category is set.
+    # Returns "Category/RuleName" for display and config matching.
     def self.qualified_name
-      short = name.split("::").last
-      cat = category
-      cat ? "#{cat}/#{short}" : short
-    end
-
-    # Returns just "RuleName" without category prefix.
-    def self.short_name
-      name.split("::").last
+      "#{category}/#{name.split('::').last}"
     end
 
     # Override to restrict this rule to specific file path patterns.
@@ -56,8 +38,6 @@ module PhlexLint
     end
 
     # Override to link to design system documentation.
-    # Return a skill path (e.g. ".claude/skills/design-system/SKILL.md#component-decision-tree")
-    # or external URL.
     def self.documentation_url
       nil
     end
@@ -71,7 +51,6 @@ module PhlexLint
 
     # Override in subclasses to provide an auto-correction for this violation.
     # Return a Correction object, or nil if not auto-correctable.
-    # Has access to @file_path.
     def auto_correct(_node, _message)
       nil
     end

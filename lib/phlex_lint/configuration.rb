@@ -70,6 +70,19 @@ module PhlexLint
       @rules_config.empty?
     end
 
+    # Returns the list of component names this rule is restricted to,
+    # or nil if no component filtering is configured.
+    # Checks qualified name, category, and short name levels.
+    def components_for_rule(qualified_name)
+      category, short_name = split_qualified(qualified_name)
+
+      # Most specific wins: qualified name > short name > category > AllRules
+      components_from_key(qualified_name) ||
+        (short_name != qualified_name && components_from_key(short_name)) ||
+        (category && components_from_key(category)) ||
+        components_from_key("AllRules")
+    end
+
     private
 
     # Split "Style/NoInlineStyles" into ["Style", "NoInlineStyles"].
@@ -114,6 +127,16 @@ module PhlexLint
       return true unless excludes.is_a?(Array) && !excludes.empty?
 
       !excludes.any? { |pattern| match_glob?(pattern, file_path) }
+    end
+
+    def components_from_key(key)
+      cfg = @rules_config[key]
+      return nil unless cfg.is_a?(Hash)
+
+      components = cfg["Components"]
+      return nil unless components.is_a?(Array) && !components.empty?
+
+      components.map(&:to_sym)
     end
 
     def match_glob?(pattern, file_path)

@@ -12,10 +12,28 @@ module PhlexLint
   #   3. Walks `view_template`, expanding helper calls inline
   #   4. Produces a PhlexNode tree where each node is a rendered component
   #
-  # Component detection: method calls starting with an uppercase letter (PascalCase)
-  # are treated as component calls. Snake_case calls matching a helper definition
-  # are expanded inline. All other calls (form_with, t(), etc.) are opaque leaves.
+  # Also collects skip annotations (# phlex-lint:disable ...) for suppressing
+  # violations on specific lines.
   class Parser
+    SKIP_PATTERN = /phlex-lint:disable\s*(.*)/
+
+    # Standard HTML elements available as Phlex helper methods.
+    # Used by rules to distinguish raw HTML from component calls.
+    RAW_HTML_ELEMENTS = Set.new(%i[
+      a abbr address article aside b bdi bdo blockquote br button
+      canvas caption cite code col colgroup data datalist dd del
+      details dfn dialog div dl dt em embed fieldset figcaption
+      figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr i
+      iframe img input ins kbd label legend li link main map mark
+      menu meter nav noscript object ol optgroup option output p
+      param picture pre progress q rp rt ruby s samp script
+      search section select slot small source span strong sub
+      summary sup svg table tbody td template textarea tfoot th
+      thead time tr track u ul var video wbr
+    ]).freeze
+
+    attr_reader :skip_annotations
+
     # Parse a file on disk. Returns a PhlexNode root, or nil if unparseable.
     def self.parse_file(file_path)
       source = File.read(file_path)
@@ -33,11 +51,11 @@ module PhlexLint
       @source = source
       @file_path = file_path
       @expanding_helpers = Set.new  # cycle detection for recursive/mutual helper calls
-      @disabled_rules = {}          # { line_number => Set of disabled rule names }
-      parse_disabled_rules
+      @skip_annotations = {}       # { line_number => [:all] or [RuleName, ...] }
     end
 
     def parse
+      collect_skip_annotations
       ast = build_ruby_ast
       return nil unless ast
 
@@ -51,74 +69,28 @@ module PhlexLint
       root
     end
 
-    # Check if a rule is disabled at a specific line
-    def rule_disabled_at_line?(rule_name, line)
-      return false if @disabled_rules.empty?
+    # Check if a rule is disabled for a given line number.
+    def disabled_at?(line, rule_name)
+      return false unless @skip_annotations.key?(line)
 
-      # Build the current disabled state at this line
-      # Start with no disabled rules
-      current_disabled = Set.new
-
-      # Process all disable/enable directives up to this line
-      @disabled_rules.keys.sort.each do |directive_line|
-        next if directive_line > line  # Directives after this line don't affect it; same-line directives DO apply
-
-        if @disabled_rules[directive_line] == :all
-          # Disable or enable all rules
-          # We need to know if it's a disable or enable directive
-          # Let's check the actual line
-          source_line = @source.lines[directive_line - 1]
-          if source_line =~ /#\s*phlex-lint:disable/
-            current_disabled = :all
-          elsif source_line =~ /#\s*phlex-lint:enable/
-            current_disabled = Set.new
-          end
-        else
-          # Disable or enable specific rules
-          source_line = @source.lines[directive_line - 1]
-          if source_line =~ /#\s*phlex-lint:enable/
-            # Enable specific rules - remove them from current_disabled
-            current_disabled = current_disabled - @disabled_rules[directive_line]
-          else
-            # Disable specific rules - add them to current_disabled
-            current_disabled = current_disabled | @disabled_rules[directive_line]
-          end
-        end
-      end
-
-      # Check if the rule is currently disabled
-      return true if current_disabled == :all
-      current_disabled.include?(rule_name)
+      disabled_rules = @skip_annotations[line]
+      disabled_rules.include?(:all) || disabled_rules.include?(rule_name)
     end
 
     private
 
-    # Parse source comments for phlex-lint:disable and phlex-lint:enable directives
-    def parse_disabled_rules
-      @source.lines.each_with_index do |line, index|
-        line_num = index + 1
+    def collect_skip_annotations
+      @source.each_line.with_index(1) do |line, line_number|
+        match = line.match(SKIP_PATTERN)
+        next unless match
 
-        # Check for phlex-lint:disable or phlex-lint:enable
-        if line =~ /#\s*phlex-lint:disable(?:\s+(.+))?/
-          rules = $1
-          if rules.nil? || rules.strip.empty? || rules.strip.start_with?("(")
-            @disabled_rules[line_num] = :all
-          else
-            # Strip trailing comments (e.g., "RuleName -- reason" or "RuleName # rubocop:disable ...")
-            clean_rules = rules.split('#').first.split('--').first
-            @disabled_rules[line_num] = clean_rules.split(',').map(&:strip).reject(&:empty?).to_set
-          end
-        elsif line =~ /#\s*phlex-lint:enable(?:\s+(.+))?/
-          rules = $1
-          if rules.nil? || rules.strip.empty?
-            # Enable all - store as :all to clear all previous disables
-            @disabled_rules[line_num] = :all
-          else
-            # Enable specific rules - store as empty set to clear those specific rules
-            # Note: This actually means "enable only these rules" not "clear these rules"
-            # For simplicity, we treat enable without specific rules as :all
-            @disabled_rules[line_num] = rules.split(',').map(&:strip).to_set
-          end
+        rules_str = match[1].strip
+        if rules_str.empty?
+          # Bare "# phlex-lint:disable" disables all rules for the next line
+          @skip_annotations[line_number + 1] = [:all]
+        else
+          rule_names = rules_str.split(",").map(&:strip).reject(&:empty?)
+          @skip_annotations[line_number + 1] = rule_names
         end
       end
     end
@@ -158,48 +130,17 @@ module PhlexLint
     def walk(node, parent:)
       return unless node.is_a?(::Parser::AST::Node)
 
-      handled = case node.type
-                when :begin
-                  node.children.each { |child| walk(child, parent:) }
-                  true
-                when :block
-                  walk_block(node, parent:)
-                  true
-                when :send
-                  walk_send(node, parent:)
-                  true
-                when :if
-                  # Walk both branches — the tree represents all possible render paths.
-                  walk(node.children[1], parent:)
-                  walk(node.children[2], parent:)
-                  true
-      when :case
-        # Walk all when branches and else branch
-        # case structure: [condition, when_node1, when_node2, ..., else_node]
-        condition_node, *when_branches, else_branch = node.children
-        when_branches.each do |when_node|
-          # when_node structure: [:when, condition, body]
-          # The body is at children[1]
-          walk(when_node.children[1], parent:) if when_node.children[1]
-        end
-        walk(else_branch, parent:) if else_branch && else_branch != condition_node
-                  true
-                when :and, :or
-                  # Walk both sides of and/or — all paths are possible
-                  walk(node.children[0], parent:)
-                  walk(node.children[1], parent:)
-                  true
-                when :resbody
-                  # Walk rescue body (error handling paths)
-                  walk(node.children[2], parent:) if node.children[2]
-                  true
-                else
-                  false
-                end
-
-      # For unhandled node types, walk all children recursively
-      unless handled
+      case node.type
+      when :begin
         node.children.each { |child| walk(child, parent:) }
+      when :block
+        walk_block(node, parent:)
+      when :send
+        walk_send(node, parent:)
+      when :if
+        # Walk both branches — the tree represents all possible render paths.
+        walk(node.children[1], parent:)
+        walk(node.children[2], parent:)
       end
       # lvar, ivar, str, int, const, etc. are opaque leaves — intentionally ignored.
     end
@@ -216,19 +157,8 @@ module PhlexLint
         return
       end
 
-      if component?(method_name) || tracked_method?(method_name)
+      if component?(method_name)
         kwargs    = extract_kwargs(arg_nodes)
-        phlex_node = PhlexNode.new(
-          name:        method_name,
-          kwargs:      kwargs,
-          children:    [],
-          parent:      parent,
-          source_node: send_node
-        )
-        parent.children << phlex_node
-        walk(block_body, parent: phlex_node)
-      elsif receiver.nil? && raw_html_element?(method_name)
-        kwargs     = extract_kwargs(arg_nodes)
         phlex_node = PhlexNode.new(
           name:        method_name,
           kwargs:      kwargs,
@@ -253,27 +183,17 @@ module PhlexLint
         return
       end
 
-      if component?(method_name) || tracked_method?(method_name)
-        kwargs    = extract_kwargs(arg_nodes)
-        phlex_node = PhlexNode.new(
-          name:        method_name,
-          kwargs:      kwargs,
-          children:    [],
-          parent:      parent,
-          source_node: node
-        )
-        parent.children << phlex_node
-      elsif receiver.nil? && raw_html_element?(method_name)
-        kwargs     = extract_kwargs(arg_nodes)
-        phlex_node = PhlexNode.new(
-          name:        method_name,
-          kwargs:      kwargs,
-          children:    [],
-          parent:      parent,
-          source_node: node
-        )
-        parent.children << phlex_node
-      end
+      return unless component?(method_name)
+
+      kwargs    = extract_kwargs(arg_nodes)
+      phlex_node = PhlexNode.new(
+        name:        method_name,
+        kwargs:      kwargs,
+        children:    [],
+        parent:      parent,
+        source_node: node
+      )
+      parent.children << phlex_node
     end
 
     def expandable_helper?(method_name)
@@ -290,42 +210,6 @@ module PhlexLint
     # This matches Phlex's convention: GlassCard, FlexColumn, PageContainer, etc.
     def component?(name)
       name.is_a?(Symbol) && name.to_s.match?(/\A[A-Z]/)
-    end
-
-    # Additional method names to track for linting purposes (not Phlex components)
-    TRACKED_METHODS = Set.new(%i[content_tag tag]).freeze
-
-    def tracked_method?(name)
-      TRACKED_METHODS.include?(name)
-    end
-
-    # HTML element method names that Phlex maps to raw HTML output.
-    # These are tracked as PhlexNodes with the element name as :name so rules
-    # can detect raw HTML usage (e.g. `a` instead of Link, `hr` instead of Separator).
-    RAW_HTML_ELEMENTS = Set.new(%i[
-      a abbr address article aside audio
-      b blockquote br button
-      caption code col colgroup
-      datalist dd del details dfn dialog div dl dt
-      em
-      fieldset figcaption figure footer form
-      h1 h2 h3 h4 h5 h6 header hr
-      i iframe img input
-      kbd
-      label legend li
-      main mark menu meter
-      nav
-      ol optgroup option output
-      p picture pre progress
-      q
-      s samp section select small span strong sub summary sup svg
-      table tbody td template textarea tfoot th thead time tr
-      u ul
-      video
-    ]).freeze
-
-    def raw_html_element?(name)
-      name.is_a?(Symbol) && RAW_HTML_ELEMENTS.include?(name)
     end
 
     # Extract keyword arguments from the argument list of a send node.
@@ -374,8 +258,6 @@ module PhlexLint
       when :false then false
       when :nil   then nil
       when :int   then node.children[0]
-      when :dstr  then :__interpolated__  # Interpolated string: "btn #{variant}"
-      when :dsym  then :__interpolated__  # Interpolated symbol: :"btn-#{variant}"
       else             :__dynamic__
       end
     end
