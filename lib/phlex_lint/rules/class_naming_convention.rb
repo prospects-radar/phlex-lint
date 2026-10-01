@@ -19,9 +19,10 @@ module PhlexLint
     class ClassNamingConvention < Rule
       category "ITCSS"
 
-      # Pattern for invalid class names: contains uppercase letters.
-      # Underscores are allowed (BEM notation and design tokens use them).
-      INVALID_PATTERN = /[A-Z]/
+      # Pattern for invalid class names:
+      #   - Contains uppercase letters (camelCase, PascalCase), OR
+      #   - Contains a lone underscore (snake_case) — single `_` not part of BEM `__`.
+      INVALID_PATTERN = /[A-Z]|(?<![_])_(?![_])/
 
       MESSAGE = "CSS class names must use kebab-case (lowercase with hyphens). " \
                 "No uppercase letters. Got: %<class_name>s"
