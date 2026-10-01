@@ -26,7 +26,7 @@ RSpec.describe PhlexLint::Rules::ReviewInterpolatedClasses do
       tree = parse(<<~RUBY)
         def view_template
           Button(class: "btn btn-\#{@variant}") { "Save" }
-          div(class: "widget-#{@type}") { "content" }
+          div(class: "widget-\#{@type}") { "content" }
         end
       RUBY
 

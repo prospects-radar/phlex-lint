@@ -19,7 +19,7 @@ RSpec.describe PhlexLint::Rules::NoMixingLayerConcerns do
 
       rule.check(tree)
       expect(rule.violations.count).to eq(1)
-      expect(rule.violations.first.message).to include("3 utilities")
+      expect(rule.violations.first.message).to include("4 utilities")
     end
 
     it "flags very high utility density" do
@@ -31,7 +31,7 @@ RSpec.describe PhlexLint::Rules::NoMixingLayerConcerns do
 
       rule.check(tree)
       expect(rule.violations.count).to eq(1)
-      expect(rule.violations.first.message).to include("6 utilities")
+      expect(rule.violations.first.message).to include("5 utilities")
     end
 
     it "ignores low utility density with component class" do

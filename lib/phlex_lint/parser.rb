@@ -15,7 +15,8 @@ module PhlexLint
   # Also collects skip annotations (# phlex-lint:disable ...) for suppressing
   # violations on specific lines.
   class Parser
-    SKIP_PATTERN = /phlex-lint:disable\s*(.*)/
+    DISABLE_PATTERN = /phlex-lint:disable\s*(.*)/
+    ENABLE_PATTERN  = /phlex-lint:enable\s*(.*)/
 
     # Standard HTML elements available as Phlex helper methods.
     # Used by rules to distinguish raw HTML from component calls.
@@ -80,18 +81,28 @@ module PhlexLint
     private
 
     def collect_skip_annotations
-      @source.each_line.with_index(1) do |line, line_number|
-        match = line.match(SKIP_PATTERN)
-        next unless match
+      active_disables = []  # currently active disabled rules (or [:all])
 
-        rules_str = match[1].strip
-        if rules_str.empty?
-          # Bare "# phlex-lint:disable" disables all rules for the next line
-          @skip_annotations[line_number + 1] = [:all]
-        else
-          rule_names = rules_str.split(",").map(&:strip).reject(&:empty?)
-          @skip_annotations[line_number + 1] = rule_names
+      @source.each_line.with_index(1) do |line, line_number|
+        if (m = line.match(DISABLE_PATTERN))
+          rules_str = m[1].strip
+          new_rules = rules_str.empty? ? [:all] : rules_str.split(",").map(&:strip).reject(&:empty?)
+          active_disables = (active_disables + new_rules).uniq
+          next
         end
+
+        if (m = line.match(ENABLE_PATTERN))
+          rules_str = m[1].strip
+          if rules_str.empty?
+            active_disables = []
+          else
+            re_enabled = rules_str.split(",").map(&:strip).reject(&:empty?)
+            active_disables = active_disables - re_enabled
+          end
+          next
+        end
+
+        @skip_annotations[line_number] = active_disables.dup unless active_disables.empty?
       end
     end
 
@@ -206,10 +217,15 @@ module PhlexLint
       @expanding_helpers.delete(method_name)
     end
 
-    # A method call is a component if its name starts with an uppercase letter.
-    # This matches Phlex's convention: GlassCard, FlexColumn, PageContainer, etc.
+    # Rails helpers that should be tracked as nodes (not HTML, not uppercase).
+    TRACKED_HELPERS = Set.new(%i[content_tag]).freeze
+
+    # A method call is tracked if it's an uppercase component, a raw HTML element,
+    # or a known Rails helper that rules need to inspect.
     def component?(name)
-      name.is_a?(Symbol) && name.to_s.match?(/\A[A-Z]/)
+      return false unless name.is_a?(Symbol)
+
+      name.to_s.match?(/\A[A-Z]/) || RAW_HTML_ELEMENTS.include?(name) || TRACKED_HELPERS.include?(name)
     end
 
     # Extract keyword arguments from the argument list of a send node.
@@ -254,6 +270,7 @@ module PhlexLint
       case node.type
       when :sym   then node.children[0]
       when :str   then node.children[0]
+      when :dstr  then :__interpolated__
       when :true  then true
       when :false then false
       when :nil   then nil
